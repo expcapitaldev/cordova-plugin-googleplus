@@ -2,6 +2,29 @@
 #import "objc/runtime.h"
 #import "GooglePlus.h"
 
+static NSString *const kCancelledDomain = @"SignInCancelled";
+static NSString *const kCancelledErrorMessage = @"canceled";
+
+
+@interface GPViewController : UIViewController
+    @property (nonatomic, copy) void (^presentedHandler)(UIViewController *presented);
+@end
+
+@implementation GPViewController
+ - (UIViewController*) presentedViewController
+ {
+     UIViewController* presented = [super presentedViewController];
+     self.presentedHandler(presented);
+     return presented;
+ }
+@end
+
+@interface GooglePlus ()
+    @property (nonatomic, strong) GPViewController* internalViewController;
+    @property (nonatomic) BOOL signInControllerShown;
+@end
+
+
 @implementation GooglePlus
 
 - (void)pluginInitialize
@@ -39,21 +62,27 @@
 }
 
 - (void) login:(CDVInvokedUrlCommand*)command {
-  [[self getGIDSignInObject:command] signIn];
+    [self getGIDSignInObject:command completion:^(GIDSignIn *signIn) {
+        self.signInStarted = YES;
+        [signIn signIn];
+    }];
 }
 
 /** Get Google Sign-In object
  @date July 19, 2015
  */
 - (void) trySilentLogin:(CDVInvokedUrlCommand*)command {
-    [[self getGIDSignInObject:command] restorePreviousSignIn];
+    [self getGIDSignInObject:command completion:^(GIDSignIn *signIn) {
+        self.signInStarted = YES;
+        [signIn restorePreviousSignIn];
+    }];
 }
 
 /** Get Google Sign-In object
  @date July 19, 2015
  @date updated March 15, 2015 (@author PointSource,LLC)
  */
-- (GIDSignIn*) getGIDSignInObject:(CDVInvokedUrlCommand*)command {
+- (void) getGIDSignInObject:(CDVInvokedUrlCommand*)command completion:(void (^)(GIDSignIn *signIn))completionHandler {
     _callbackId = command.callbackId;
     NSDictionary* options = command.arguments[0];
     NSString *reversedClientId = [self getreversedClientId];
@@ -61,7 +90,10 @@
     if (reversedClientId == nil) {
         CDVPluginResult * pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:@"Could not find REVERSED_CLIENT_ID url scheme in app .plist"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:_callbackId];
-        return nil;
+
+        completionHandler(nil);
+
+        return;
     }
 
     NSString *clientId = [self reverseUrlScheme:reversedClientId];
@@ -86,15 +118,41 @@
         signIn.hostedDomain = hostedDomain;
     }
 
-    signIn.presentingViewController = self.viewController;
-    signIn.delegate = self;
+    self.internalViewController = [GPViewController new];
+    self.internalViewController.modalPresentationStyle = UIModalPresentationOverCurrentContext;
+    self.internalViewController.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    self.internalViewController.view.backgroundColor = [UIColor clearColor];
 
-    // default scopes are email and profile
-    if (scopesString != nil) {
-        NSArray* scopes = [scopesString componentsSeparatedByString:@" "];
-        [signIn setScopes:scopes];
-    }
-    return signIn;
+    __weak __typeof(self) weakSelf = self;
+
+    self.internalViewController.presentedHandler = ^(UIViewController *presented) {
+
+        if (weakSelf.signInStarted && presented != nil) {
+            weakSelf.signInControllerShown = YES;
+        }
+        if (weakSelf.signInControllerShown && presented == nil) {
+            [weakSelf signIn:nil didSignInForUser:nil withError:[NSError errorWithDomain:kCancelledDomain code:0 userInfo:nil]];
+        }
+
+    };
+
+
+    [self.viewController presentViewController:self.internalViewController animated:NO completion: ^{
+
+        signIn.presentingViewController = weakSelf.internalViewController;
+
+        signIn.delegate = weakSelf;
+
+         // default scopes are email and profile
+         if (scopesString != nil) {
+             NSArray* scopes = [scopesString componentsSeparatedByString:@" "];
+             [signIn setScopes:scopes];
+         }
+         completionHandler(signIn);
+
+     }];
+
+
 }
 
 - (NSString*) reverseUrlScheme:(NSString*)scheme {
@@ -142,8 +200,14 @@
  @date July 19, 2015
  */
 - (void)signIn:(GIDSignIn *)signIn didSignInForUser:(GIDGoogleUser *)user withError:(NSError *)error {
+
+    self.signInControllerShown = NO;
+    self.signInStarted = NO;
+
+    [self.internalViewController dismissViewControllerAnimated:NO completion:nil];
+    self.internalViewController = nil;
     if (error) {
-        CDVPluginResult * pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString:error.localizedDescription];
+        CDVPluginResult * pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR messageAsString: [error.domain isEqualToString:kCancelledDomain] ? kCancelledErrorMessage : error.localizedDescription];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:_callbackId];
     } else {
         NSString *email = user.profile.email;

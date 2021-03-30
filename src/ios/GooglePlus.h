@@ -4,7 +4,8 @@
 @interface GooglePlus : CDVPlugin<GIDSignInDelegate, GIDSignInDelegate>
 
 @property (nonatomic, copy) NSString* callbackId;
-@property (nonatomic, assign) BOOL isSigningIn;
+@property (nonatomic, assign) BOOL isSigningIn; // old unused
+@property (nonatomic) BOOL signInStarted;
 
 - (void) isAvailable:(CDVInvokedUrlCommand*)command;
 - (void) login:(CDVInvokedUrlCommand*)command;
